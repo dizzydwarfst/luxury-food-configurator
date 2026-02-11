@@ -1,28 +1,17 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useCart } from '../context/CartContext'
 import { getMenuItem } from '../data/menu'
+import AIPairingBot from '../components/AIPairingBot'
 
 export default function Cart() {
-  const { cart, removeFromCart, clearCart } = useCart()
-  const [orderJson, setOrderJson] = useState(null)
+  const { cart, orders, removeFromCart, clearCart, placeOrder } = useCart()
+  const navigate = useNavigate()
 
   const handlePlaceOrder = () => {
-    const summary = {
-      placedAt: new Date().toISOString(),
-      itemCount: cart.length,
-      items: cart.map((c) => ({
-        cartItemId: c.cartItemId,
-        itemId: c.itemId,
-        name: c.name,
-        variantId: c.variantId,
-        activeIngredients: Object.entries(c.activeIngredients)
-          .filter(([, on]) => on)
-          .map(([id]) => id),
-      })),
-    }
-    setOrderJson(JSON.stringify(summary, null, 2))
+    const order = placeOrder()
+    if (!order) return
+    navigate(`/order-success/${order.orderId}`)
   }
 
   const activeIngredientNames = (cartItem) => {
@@ -53,9 +42,13 @@ export default function Cart() {
         </div>
 
         {cart.length === 0 ? (
-          <p className="text-neutral-500 py-8">Your cart is empty.</p>
+          <>
+            <p className="text-neutral-500 py-3">Your cart is empty.</p>
+            <AIPairingBot cart={cart} orders={orders} />
+          </>
         ) : (
           <>
+            <AIPairingBot cart={cart} orders={orders} />
             {/* Bill receipt style list */}
             <div
               className="bg-white rounded-2xl shadow-sm border border-neutral-200/80 overflow-hidden mb-6"
@@ -64,31 +57,32 @@ export default function Cart() {
               <div className="px-4 py-3 border-b border-neutral-200 text-sm text-neutral-500">
                 ITEM · INGREDIENTS · VARIANT ID
               </div>
-              {cart.map((c) => (
-                <div
-                  key={c.cartItemId}
-                  className="px-4 py-3 border-b border-neutral-100 last:border-b-0 flex justify-between items-start gap-4"
-                >
-                  <div className="min-w-0">
-                    <div className="font-medium text-neutral-900">{c.name}</div>
-                    <div className="text-sm text-neutral-500 mt-0.5">
-                      {activeIngredientNames(c).length
-                        ? activeIngredientNames(c).join(', ')
-                        : '—'}
+              {cart.map((c) => {
+                const activeNames = activeIngredientNames(c)
+                return (
+                  <div
+                    key={c.cartItemId}
+                    className="px-4 py-3 border-b border-neutral-100 last:border-b-0 flex justify-between items-start gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-neutral-900">{c.name}</div>
+                      <div className="text-sm text-neutral-500 mt-0.5">
+                        {activeNames.length ? activeNames.join(', ') : '—'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-neutral-400 tabular-nums">#{c.variantId}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeFromCart(c.cartItemId)}
+                        className="text-xs text-red-600 hover:underline"
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="text-xs text-neutral-400 tabular-nums">#{c.variantId}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeFromCart(c.cartItemId)}
-                      className="text-xs text-red-600 hover:underline"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             <div className="flex flex-col gap-3">
@@ -108,11 +102,6 @@ export default function Cart() {
               </button>
             </div>
 
-            {orderJson && (
-              <div className="mt-6 p-4 bg-neutral-900 rounded-xl text-neutral-300 text-xs overflow-x-auto">
-                <pre className="whitespace-pre-wrap">{orderJson}</pre>
-              </div>
-            )}
           </>
         )}
       </div>

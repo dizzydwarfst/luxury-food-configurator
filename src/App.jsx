@@ -6,6 +6,8 @@ import Welcome from './pages/Welcome'
 import Menu from './pages/Menu'
 import Configurator from './pages/Configurator'
 import Cart from './pages/Cart'
+import OrderSuccess from './pages/OrderSuccess'
+import Kitchen from './pages/Kitchen'
 
 class ErrorBoundary extends Component {
   state = { hasError: false }
@@ -37,6 +39,8 @@ function AnimatedRoutes() {
         <Route path="/menu" element={<Menu />} />
         <Route path="/configurator/:itemId" element={<Configurator />} />
         <Route path="/cart" element={<Cart />} />
+        <Route path="/order-success/:orderId" element={<OrderSuccess />} />
+        <Route path="/kitchen" element={<Kitchen />} />
       </Routes>
     </AnimatePresence>
   )

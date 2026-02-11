@@ -1,17 +1,28 @@
 @import "tailwindcss";
 
+html,
 body {
   margin: 0;
   background: #F5F5F7;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
 }
 
 #root {
-  width: 100vw;
+  width: 100%;
   min-height: 100vh;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+#root::-webkit-scrollbar {
+  display: none;
 }
 
 .scrollbar-hide {
