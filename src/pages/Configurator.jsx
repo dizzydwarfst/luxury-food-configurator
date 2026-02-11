@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Canvas } from '@react-three/fiber'
 import { Environment, OrbitControls } from '@react-three/drei'
+import { XR, createXRStore } from '@react-three/xr'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { USDZExporter } from 'three/examples/jsm/exporters/USDZExporter.js'
 import { Sun, ArrowLeft } from 'lucide-react'
@@ -43,6 +44,7 @@ export default function Configurator() {
   const navigate = useNavigate()
   const { addToCart } = useCart()
   const pizzaGroupRef = useRef(null)
+  const xrStore = useMemo(() => createXRStore(), [])
   const [arLoading, setArLoading] = useState(false)
   const [arStatusText, setArStatusText] = useState('Generating AR Model...')
   const [arHintText, setArHintText] = useState('')
@@ -126,44 +128,13 @@ export default function Configurator() {
     }
   }, [itemId])
 
-  const handleViewInAR = useCallback(() => {
-    setArStatusText('Generating AR Model...')
-    setArHintText('')
-    if (arDebugEnabled) setArDebugText('')
-
-    // Launch AR in the supported production matrix:
-    // - Android Chrome -> Scene Viewer
-    // - iPhone Safari -> Quick Look
-    if (isAndroidChrome && menuItem?.modelType === 'pizza') {
-      setArLoading(true)
-      setArStatusText('Opening Scene Viewer...')
-      setArHintText('If AR does not open, ensure Google app/ARCore is available on this phone.')
-      logAr('android_scene_viewer_launch')
-      const modelUrl = new URL('/pizza.glb', window.location.origin).toString()
-      openAndroidSceneViewer(modelUrl, menuItem.name ?? 'AR Model')
-      setTimeout(() => {
-        setArLoading(false)
-        setArHintText('If nothing opened, retry after tapping the screen once and checking AR permissions.')
-        logAr('android_scene_viewer_timeout')
-      }, 3500)
-      return
-    }
-
-    if (isAndroid && !isAndroidChrome) {
-      setArLoading(true)
-      setArStatusText('AR requires Chrome on Android')
-      setArHintText('Open this page in Chrome for camera AR, or continue with model download fallback.')
-      logAr('android_non_chrome_fallback')
-      setTimeout(() => setArLoading(false), 2200)
-      return
-    }
-
+  const runARFallback = useCallback(() => {
     setArLoading(true)
     const runExport = async () => {
       try {
         if (isIOSDevice && isSafariBrowser) {
           setArStatusText('Preparing USDZ for Quick Look...')
-          setArHintText('iPhone should open Quick Look camera AR after export.')
+          setArHintText('No app needed — AR opens in Quick Look.')
           logAr('ios_quicklook_export_start')
           const quickLookOpened = await openIOSQuickLook()
           if (quickLookOpened) {
@@ -175,14 +146,32 @@ export default function Configurator() {
           logAr('ios_quicklook_failed')
         } else if (isIOSDevice && !isSafariBrowser) {
           setArStatusText('Open in Safari for iPhone AR')
-          setArHintText('Quick Look camera AR only opens from Safari on iPhone.')
+          setArHintText('Quick Look AR only works in Safari on iPhone (no app to install).')
           logAr('ios_non_safari_fallback')
           setTimeout(() => setArLoading(false), 2200)
           return
         }
 
+        if (isAndroidChrome && menuItem?.modelType === 'pizza') {
+          setArStatusText('In-browser AR not available here')
+          setArHintText('You can try Google AR if you have it, or download the model below.')
+          logAr('android_scene_viewer_fallback')
+          const modelUrl = new URL('/pizza.glb', window.location.origin).toString()
+          openAndroidSceneViewer(modelUrl, menuItem.name ?? 'AR Model')
+          setTimeout(() => setArLoading(false), 3500)
+          return
+        }
+
+        if (isAndroid && !isAndroidChrome) {
+          setArStatusText('Use Chrome for in-browser AR')
+          setArHintText('Open this page in Chrome for AR without installing an app.')
+          logAr('android_non_chrome_fallback')
+          setTimeout(() => setArLoading(false), 2200)
+          return
+        }
+
         setArStatusText('Preparing GLB download...')
-        setArHintText('If camera AR does not open, use the downloaded model in an AR viewer app.')
+        setArHintText('Download the model to view in an AR app if you have one.')
         logAr('glb_download_fallback')
         const blob = await exportCurrentModelAsGlb()
         if (!blob) return
@@ -199,7 +188,6 @@ export default function Configurator() {
     }
     setTimeout(runExport, 300)
   }, [
-    arDebugEnabled,
     exportCurrentModelAsGlb,
     isAndroid,
     isAndroidChrome,
@@ -210,6 +198,56 @@ export default function Configurator() {
     menuItem,
     openAndroidSceneViewer,
     openIOSQuickLook,
+  ])
+
+  const handleViewInAR = useCallback(async () => {
+    setArStatusText('Generating AR Model...')
+    setArHintText('')
+    if (arDebugEnabled) setArDebugText('')
+
+    // iOS: use Quick Look (built-in, no app)
+    if (isIOSDevice) {
+      runARFallback()
+      return
+    }
+
+    // Android / desktop: try in-browser WebXR first (no app), then fall back
+    const isPizza = menuItem?.modelType === 'pizza'
+    const webXRSupported =
+      typeof navigator !== 'undefined' &&
+      navigator.xr &&
+      (await navigator.xr.isSessionSupported('immersive-ar').catch(() => false))
+
+    if (webXRSupported && isPizza) {
+      setArLoading(true)
+      setArStatusText('Opening AR in browser...')
+      setArHintText('No app needed — AR runs in your browser.')
+      logAr('webxr_attempt')
+      try {
+        const result = xrStore.enterAR()
+        if (result && typeof result.catch === 'function') {
+          await result.catch((err) => {
+            logAr('webxr_failed', err?.message ?? String(err))
+            runARFallback()
+          })
+        }
+        // If we didn't run fallback, user is in AR or about to be
+        setArLoading(false)
+      } catch (err) {
+        logAr('webxr_failed', err?.message ?? String(err))
+        runARFallback()
+      }
+      return
+    }
+
+    runARFallback()
+  }, [
+    arDebugEnabled,
+    logAr,
+    menuItem,
+    runARFallback,
+    isIOSDevice,
+    xrStore,
   ])
 
   const handleAddToOrder = useCallback(() => {
@@ -249,23 +287,25 @@ export default function Configurator() {
         onCreated={({ gl }) => gl.setClearColor('#F5F5F7')}
         dpr={[1, 2]}
       >
-        <OrbitControls
-          makeDefault
-          enablePan={false}
-          minPolarAngle={0}
-          maxPolarAngle={Math.PI / 1.75}
-        />
-        <SceneLights intensity={lightIntensity} />
-        <Suspense fallback={null}>
-          {isPizza ? (
-            <Pizza ingredients={ingredients} groupRef={pizzaGroupRef} />
-          ) : (
-            <PlaceholderDish
-              shape={menuItem.placeholderShape ?? 'sphere'}
-              ingredients={ingredients}
-            />
-          )}
-        </Suspense>
+        <XR store={xrStore}>
+          <OrbitControls
+            makeDefault
+            enablePan={false}
+            minPolarAngle={0}
+            maxPolarAngle={Math.PI / 1.75}
+          />
+          <SceneLights intensity={lightIntensity} />
+          <Suspense fallback={null}>
+            {isPizza ? (
+              <Pizza ingredients={ingredients} groupRef={pizzaGroupRef} />
+            ) : (
+              <PlaceholderDish
+                shape={menuItem.placeholderShape ?? 'sphere'}
+                ingredients={ingredients}
+              />
+            )}
+          </Suspense>
+        </XR>
       </Canvas>
 
       {/* Back to menu button */}
