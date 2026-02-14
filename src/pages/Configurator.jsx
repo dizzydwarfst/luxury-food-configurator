@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Canvas } from '@react-three/fiber'
 import { Environment, OrbitControls } from '@react-three/drei'
-import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { USDZExporter } from 'three/examples/jsm/exporters/USDZExporter.js'
 import { Sun, ArrowLeft, X } from 'lucide-react'
 import { getMenuItem, calculateVariantID } from '../data/menu'
@@ -75,22 +74,6 @@ export default function Configurator() {
     }
   }, [arDebugEnabled])
 
-  const exportCurrentModelAsGlb = useCallback(async () => {
-    const group = pizzaGroupRef.current
-    if (!group) return null
-    const clone = group.clone(true)
-    const exporter = new GLTFExporter()
-    const result = await new Promise((resolve, reject) => {
-      exporter.parse(
-        clone,
-        (parsed) => resolve(parsed),
-        (error) => reject(error),
-        { binary: true }
-      )
-    })
-    return new Blob([result], { type: 'model/gltf-binary' })
-  }, [])
-
   const exportCurrentModelAsUsdz = useCallback(async () => {
     const group = pizzaGroupRef.current
     if (!group) return null
@@ -106,42 +89,51 @@ export default function Configurator() {
     }
   }, [])
 
+  /* ------------------------------------------------------------------ */
+  /*  Close AR overlay — only revoke USDZ blob (GLB is a static URL)   */
+  /* ------------------------------------------------------------------ */
   const closeAROverlay = useCallback(() => {
-    if (arGlbUrl) URL.revokeObjectURL(arGlbUrl)
     if (arUsdzUrl) URL.revokeObjectURL(arUsdzUrl)
     setArOverlayOpen(false)
     setArGlbUrl('')
     setArUsdzUrl(null)
-  }, [arGlbUrl, arUsdzUrl])
+    setArHintText('')
+  }, [arUsdzUrl])
 
+  /* ------------------------------------------------------------------ */
+  /*  Launch AR                                                         */
+  /*  • Uses the static /pizza.glb hosted on your domain so that        */
+  /*    Android Scene Viewer & iOS Quick Look can fetch a real URL.      */
+  /*  • Blob URLs are invisible to those native AR apps, which is why   */
+  /*    the old code showed the model on a black background instead.    */
+  /* ------------------------------------------------------------------ */
   const handleViewInAR = useCallback(async () => {
-    setArStatusText('Preparing AR…')
+    setArStatusText('Launching AR…')
     setArHintText('')
     if (arDebugEnabled) setArDebugText('')
     setArLoading(true)
+
     try {
-      const glbBlob = await exportCurrentModelAsGlb()
-      if (!glbBlob) {
-        setArHintText('Could not export model.')
-        setArLoading(false)
-        return
-      }
-      const glbUrl = URL.createObjectURL(glbBlob)
+      // Use the static hosted GLB — Scene Viewer & Quick Look need a real HTTPS URL
+      const glbUrl = `${window.location.origin}/pizza.glb`
+
+      // For iOS Quick Look, try exporting USDZ
       let usdzUrl = null
       if (menuItem?.modelType === 'pizza') {
         usdzUrl = await exportCurrentModelAsUsdz()
       }
+
       setArGlbUrl(glbUrl)
       setArUsdzUrl(usdzUrl)
       setArOverlayOpen(true)
       logAr('model_viewer_overlay_open')
     } catch (err) {
-      logAr('model_viewer_export_failed', err?.message ?? String(err))
-      setArHintText('Failed to prepare AR.')
+      logAr('ar_launch_failed', err?.message ?? String(err))
+      setArHintText('Failed to launch AR.')
     } finally {
       setArLoading(false)
     }
-  }, [arDebugEnabled, exportCurrentModelAsGlb, exportCurrentModelAsUsdz, logAr, menuItem])
+  }, [arDebugEnabled, exportCurrentModelAsUsdz, logAr, menuItem])
 
   const handleAddToOrder = useCallback(() => {
     if (!menuItem) return
@@ -199,18 +191,78 @@ export default function Configurator() {
         </Suspense>
       </Canvas>
 
-      {/* AR overlay: model-viewer with universal AR button */}
+      {/* ------------------------------------------------------------ */}
+      {/*  AR OVERLAY                                                   */}
+      {/*  • model-viewer auto-activates AR on supported devices        */}
+      {/*  • Falls back to interactive 3D preview if AR unsupported     */}
+      {/* ------------------------------------------------------------ */}
       {arOverlayOpen && arGlbUrl && (
-        <div className="ar-overlay">
+        <div
+          className="ar-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100,
+            background: '#F5F5F7',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {/* Close button */}
           <button
             type="button"
             onClick={closeAROverlay}
             className="ar-overlay-close"
+            style={{
+              position: 'absolute',
+              top: 24,
+              right: 16,
+              zIndex: 110,
+              background: 'rgba(255,255,255,0.8)',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+              borderRadius: '50%',
+              width: 44,
+              height: 44,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px solid rgba(255,255,255,0.5)',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+            }}
             aria-label="Close AR"
           >
             <X className="h-6 w-6" strokeWidth={2} />
           </button>
+
+          {/* model-viewer: auto-activates AR when ready */}
           <model-viewer
+            ref={(el) => {
+              if (!el) return
+
+              const tryActivateAR = () => {
+                if (el.canActivateAR) {
+                  el.activateAR()
+                }
+              }
+
+              // Try immediately in case it's already loaded
+              tryActivateAR()
+
+              // Also listen for the load event
+              el.addEventListener('load', tryActivateAR)
+
+              // Listen for AR status changes
+              el.addEventListener('ar-status', (e) => {
+                logAr('ar-status', e.detail.status)
+                if (e.detail.status === 'failed') {
+                  setArHintText('AR is not supported on this device. Showing 3D preview instead.')
+                }
+              })
+            }}
             src={arGlbUrl}
             ios-src={arUsdzUrl || undefined}
             alt={menuItem?.name ?? 'AR Model'}
@@ -223,10 +275,47 @@ export default function Configurator() {
             reveal="auto"
             style={{ width: '100%', height: '100%', display: 'block' }}
           >
-            <button type="button" slot="ar-button">
-              View in AR
+            {/* Fallback AR button — visible if auto-activate didn't fire */}
+            <button
+              type="button"
+              slot="ar-button"
+              style={{
+                position: 'absolute',
+                bottom: 24,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                padding: '12px 32px',
+                background: '#000',
+                color: '#fff',
+                borderRadius: 999,
+                fontSize: 16,
+                fontWeight: 600,
+                border: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+              }}
+            >
+              Tap to start AR
             </button>
           </model-viewer>
+
+          {/* Hint text for errors or unsupported devices */}
+          {arHintText && (
+            <p
+              style={{
+                position: 'absolute',
+                bottom: 80,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                color: '#888',
+                fontSize: 14,
+                textAlign: 'center',
+                maxWidth: '80%',
+              }}
+            >
+              {arHintText}
+            </p>
+          )}
         </div>
       )}
 
